@@ -15,16 +15,33 @@ const logger = winston.createLogger({
 export class AutoUpdater {
     private isUpdateInProgress = false;
 
-    // In a real scenario, this would check a remote endpoint.
-    // For now, we will simulate the check or assume a git repo is available.
     public async checkForUpdates(): Promise<boolean> {
         try {
-            logger.info('Checking for updates via Git...');
-            
-            // Check if .git exists
+            // Check if .git exists and configure if needed
             if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
-                logger.warn('AutoUpdater: Not a git repository. Skipping update check.');
-                return false;
+                logger.warn('AutoUpdater: Not a git repository. Attempting to initialize...');
+                try {
+                    await execAsync('git init');
+                    await execAsync('git remote add origin https://github.com/AssisCabron/Daemon');
+                    await execAsync('git fetch');
+                    try {
+                        await execAsync('git checkout main');
+                        await execAsync('git branch --set-upstream-to=origin/main main');
+                    } catch (e) {
+                         logger.warn('AutoUpdater: Could not checkout main branch automatically.');
+                    }
+                    logger.info('AutoUpdater: Git repository initialized successfully.');
+                } catch (e: any) {
+                    logger.error(`AutoUpdater: Failed to initialize git repository: ${e.message}`);
+                    return false;
+                }
+            } else {
+                // Ensure remote is correct
+                try {
+                    await execAsync('git remote set-url origin https://github.com/AssisCabron/Daemon');
+                } catch (e) {
+                    // ignore
+                }
             }
 
             // Fetch latest
