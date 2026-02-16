@@ -861,7 +861,9 @@ app.post('/api/servers/:id/stop', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});app.delete('/api/servers/:id', async (req, res) => {
+});
+
+app.delete('/api/servers/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const server = await prisma.server.findUnique({ where: { id } });
