@@ -818,6 +818,16 @@ app.post('/api/servers/:id/start', async (req, res) => {
       console.log(`[RexHost] Updated ports in server.properties for ${server.id} to ${server.port}`);
     }
 
+    // Check if the server JAR exists before starting (if command implies a jar)
+    // This is a heuristic to detect missing core files and prompt user to install
+    if (finalCommand.includes('.jar') && !processManager.checkFileExists(finalCwd, 'server.jar')) {
+        // If the command mentions a jar but server.jar is missing, try to find other common entry points
+        // or just fail if it's strictly a jar command.
+       if (!processManager.checkFileExists(finalCwd, 'server.jar') && !processManager.checkFileExists(finalCwd, 'run.bat') && !processManager.checkFileExists(finalCwd, 'run.sh')) {
+           return res.status(400).json({ error: 'Server executable not found', code: 'SERVER_JAR_MISSING' });
+       }
+    }
+
     processManager.startServer({ 
       id, 
       command: finalCommand.trim(), 
@@ -826,24 +836,11 @@ app.post('/api/servers/:id/start', async (req, res) => {
       memory: server.memory, // MB
       cpu: server.cpu, // Shares
       port: server.port || 25565,
-
       // Use Server-specific Docker Image, fallback to Egg default, fallback to system default
       dockerImage: server.docker_image || server.egg?.docker_image || 'eclipse-temurin:17-jre'
     });
     
     logger.info(`Server ${id} using Docker Image: ${server.docker_image || server.egg?.docker_image || 'eclipse-temurin:17-jre'}`);
-
-    // Check if the server JAR exists before starting (if command implies a jar)
-    // This is a heuristic to detect missing core files and prompt user to install
-    if (finalCommand.includes('.jar') && !processManager.checkFileExists(finalCwd, 'server.jar')) {
-        // If the command mentions a jar but server.jar is missing, it's likely not installed.
-        // We throw a specific error code for the frontend to handle.
-        // Note: strict check for 'server.jar' simplifies logic for now as it's the convention.
-        // A more robust solution would parse the command for the -jar argument.
-       if (!processManager.checkFileExists(finalCwd, 'server.jar') && !processManager.checkFileExists(finalCwd, 'run.bat') && !processManager.checkFileExists(finalCwd, 'run.sh')) {
-           return res.status(400).json({ error: 'Server executable not found', code: 'SERVER_JAR_MISSING' });
-       }
-    }
     
     // Update status in DB
     await prisma.server.update({ where: { id }, data: { status: 'running' } });

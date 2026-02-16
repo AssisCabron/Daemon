@@ -61,6 +61,18 @@ export class ProcessManager extends EventEmitter {
       }
 
       logger.info(`Creating container ${containerName} with image ${config.dockerImage}`);
+      logger.info(`Mounting host path: ${path.resolve(config.cwd)} to /home/container`);
+      
+      // Debug: List files in host directory to verify availability
+      if (fs.existsSync(config.cwd)) {
+          const files = fs.readdirSync(config.cwd);
+          logger.info(`Files in ${config.cwd}: ${files.join(', ')}`);
+          if (!files.includes('server.jar')) {
+              logger.warn('WARNING: server.jar not found in host directory!');
+          }
+      } else {
+          logger.error(`Host directory does not exist: ${config.cwd}`);
+      }
 
       // Ensure image exists locally
       await this.ensureImage(config.dockerImage);
