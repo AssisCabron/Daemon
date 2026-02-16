@@ -861,6 +861,27 @@ app.post('/api/servers/:id/stop', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});app.delete('/api/servers/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const server = await prisma.server.findUnique({ where: { id } });
+    if (!server) {
+        // If server not in DB, try to clean up container anyway
+        await processManager.deleteServer(id, ''); 
+        return res.status(404).json({ error: 'Server not found' });
+    }
+
+    // Delete container and data
+    await processManager.deleteServer(id, server.cwd);
+
+    // Delete from DB
+    await prisma.server.delete({ where: { id } });
+
+    res.json({ message: 'Server deleted successfully' });
+  } catch (err: any) {
+    logger.error(`Failed to delete server ${id}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/servers/:id/command', (req, res) => {

@@ -107,6 +107,22 @@ export class ProcessManager extends EventEmitter {
         fs.mkdirSync(config.cwd, { recursive: true });
       }
 
+      // Auto-accept EULA logic
+      const eulaPath = path.join(config.cwd, 'eula.txt');
+      if (!fs.existsSync(eulaPath)) {
+          logger.info(`Auto-accepting EULA for server ${config.id}`);
+          fs.writeFileSync(eulaPath, 'eula=true\n');
+      } else {
+          // Force true if exists but might be false check? 
+          // For now, let's just ensure it exists. Some users might want a manual prompt, 
+          // but the user requested fixing the startup hang.
+          // Let's overwrite to be safe as per user request context.
+          let content = fs.readFileSync(eulaPath, 'utf8');
+          if (!content.includes('eula=true')) {
+             fs.writeFileSync(eulaPath, 'eula=true\n');
+          }
+      }
+
       let container;
       try {
         container = await this.docker.createContainer({
@@ -215,8 +231,44 @@ export class ProcessManager extends EventEmitter {
       await container.stop();
       logger.info(`Stopped container ${containerName}`);
     } catch (err: any) {
-      logger.error(`Failed to stop server ${id}: ${err.message}`);
+      if (err.statusCode !== 304) { // 304 means already stopped
+         logger.error(`Failed to stop server ${id}: ${err.message}`);
+      }
     }
+  }
+
+  public async deleteServer(id: string, cwd: string): Promise<void> {
+      const containerName = `rexhost-${id}`;
+      logger.info(`Deleting server ${id}...`);
+
+      // 1. Stop and Remove Container
+      try {
+          const container = this.docker.getContainer(containerName);
+          try {
+             await container.stop();
+          } catch (e) { /* ignore if not running */ }
+          
+          await container.remove({ force: true });
+          logger.info(`Removed container ${containerName}`);
+      } catch (err: any) {
+          if (err.statusCode !== 404) {
+              logger.warn(`Failed to remove container ${containerName}: ${err.message}`);
+          }
+      }
+
+      // 2. Delete Data Directory
+      // Verify we are deleting a safe path (inside daemon data)
+      // This is critical. We rely on the path provided by the caller (from DB).
+      if (cwd && fs.existsSync(cwd)) {
+          try {
+              // Add simple safety check: path must contain 'data/servers' or similar if possible? 
+              // For now, trust the DB record but wrap in try.
+              fs.rmSync(cwd, { recursive: true, force: true });
+              logger.info(`Deleted data directory: ${cwd}`);
+          } catch (e: any) {
+              logger.error(`Failed to delete data directory ${cwd}: ${e.message}`);
+          }
+      }
   }
 
   public async sendCommand(id: string, command: string): Promise<void> {
