@@ -70,35 +70,75 @@ export class ProcessManager extends EventEmitter {
         fs.mkdirSync(config.cwd, { recursive: true });
       }
 
-      // Convert windows path to docker compatible format if needed
-      // For Docker Desktop on Windows, typical paths like C:\Users work if shared.
-      
-      const container = await this.docker.createContainer({
-        Image: config.dockerImage,
-        name: containerName,
-        Tty: true,
-        OpenStdin: true,
-        StdinOnce: false,
-        Env: [
-          'EULA=true',
-          `SERVER_PORT=${config.port}`,
-          `MEMORY=${config.memory}`
-        ],
-        HostConfig: {
-          Binds: [
-            `${path.resolve(config.cwd)}:/home/container`
+      let container;
+      try {
+        container = await this.docker.createContainer({
+          Image: config.dockerImage,
+          name: containerName,
+          Tty: true,
+          OpenStdin: true,
+          StdinOnce: false,
+          Env: [
+            'EULA=true',
+            `SERVER_PORT=${config.port}`,
+            `MEMORY=${config.memory}`
           ],
-          PortBindings: {
-            [`${config.port}/tcp`]: [{ HostPort: `${config.port}` }]
+          HostConfig: {
+            Binds: [
+              `${path.resolve(config.cwd)}:/home/container`
+            ],
+            PortBindings: {
+              [`${config.port}/tcp`]: [{ HostPort: `${config.port}` }]
+            },
+            Memory: config.memory * 1024 * 1024, // Convert MB to bytes
+            NanoCpus: config.cpu * 10000000, // Convert % to nano cpus (approx)
+            NetworkMode: 'bridge' 
           },
-          Memory: config.memory * 1024 * 1024, // Convert MB to bytes
-          NanoCpus: config.cpu * 10000000, // Convert % to nano cpus (approx)
-          NetworkMode: 'bridge' 
-        },
-        // Execute the command string via shell to ensure parsing and environment variables work
-        Cmd: ['/bin/sh', '-c', config.command], 
-        WorkingDir: '/home/container',
-      });
+          // Execute the command string via shell to ensure parsing and environment variables work
+          Cmd: ['/bin/sh', '-c', config.command], 
+          WorkingDir: '/home/container',
+        });
+      } catch (e: any) {
+        // Handle race condition or lingering container (409 Conflict)
+        if (e.statusCode === 409) {
+           logger.warn(`Container conflict for ${containerName}, attempting force removal...`);
+           try {
+             const oldContainer = this.docker.getContainer(containerName);
+             await oldContainer.remove({ force: true });
+             
+             // Retry creation
+             container = await this.docker.createContainer({
+                Image: config.dockerImage,
+                name: containerName,
+                Tty: true,
+                OpenStdin: true,
+                StdinOnce: false,
+                Env: [
+                  'EULA=true',
+                  `SERVER_PORT=${config.port}`,
+                  `MEMORY=${config.memory}`
+                ],
+                HostConfig: {
+                  Binds: [
+                    `${path.resolve(config.cwd)}:/home/container`
+                  ],
+                  PortBindings: {
+                    [`${config.port}/tcp`]: [{ HostPort: `${config.port}` }]
+                  },
+                  Memory: config.memory * 1024 * 1024, 
+                  NanoCpus: config.cpu * 10000000, 
+                  NetworkMode: 'bridge' 
+                },
+                Cmd: ['/bin/sh', '-c', config.command], 
+                WorkingDir: '/home/container',
+             });
+           } catch (retryErr: any) {
+             throw new Error(`Failed to recover from container conflict: ${retryErr.message}`);
+           }
+        } else {
+          throw e;
+        }
+      }
 
       logger.info(`Starting container ${containerName}...`);
       await container.start();
@@ -184,6 +224,8 @@ export class ProcessManager extends EventEmitter {
   public async downloadFileViaDocker(image: string, cwd: string, url: string, fileName: string): Promise<void> {
     const containerName = `rexhost-dl-${Date.now()}`;
     
+    logger.info(`Preparing to download file using image: ${image}`);
+
     // Ensure image exists
     await this.ensureImage(image);
 

@@ -826,10 +826,12 @@ app.post('/api/servers/:id/start', async (req, res) => {
       memory: server.memory, // MB
       cpu: server.cpu, // Shares
       port: server.port || 25565,
-      port: server.port || 25565,
+
       // Use Server-specific Docker Image, fallback to Egg default, fallback to system default
       dockerImage: server.docker_image || server.egg?.docker_image || 'eclipse-temurin:17-jre'
     });
+    
+    logger.info(`Server ${id} using Docker Image: ${server.docker_image || server.egg?.docker_image || 'eclipse-temurin:17-jre'}`);
 
     // Check if the server JAR exists before starting (if command implies a jar)
     // This is a heuristic to detect missing core files and prompt user to install
