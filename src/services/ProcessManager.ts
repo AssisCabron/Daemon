@@ -3,6 +3,7 @@ import EventEmitter from 'events';
 import winston from 'winston';
 import fs from 'fs';
 import path from 'path';
+import { databaseManager } from './DatabaseManager';
 
 const logger = winston.createLogger({
   level: 'info',
@@ -22,6 +23,8 @@ export interface ServerConfig {
   cpu: number;
   dockerImage: string;
   port: number;
+  turboMode?: boolean;
+  isMinecraft?: boolean;
 }
 
 export class ProcessManager extends EventEmitter {
@@ -38,8 +41,69 @@ export class ProcessManager extends EventEmitter {
         logger.error('Failed to connect to Docker Daemon! Is it running?');
       } else {
         logger.info('Connected to Docker Daemon successfully.');
+        this.adoptRunningContainers();
       }
     });
+  }
+
+  public async adoptRunningContainers(): Promise<void> {
+    try {
+      const containers = await this.docker.listContainers({ all: true });
+      const rexContainers = containers.filter(c => c.Names.some(name => name.includes('/rexhost-')));
+      
+      logger.info(`Found ${rexContainers.length} RexHost containers. Adopting...`);
+      
+      for (const containerInfo of rexContainers) {
+        const name = containerInfo.Names[0].replace('/rexhost-', '');
+        // Skip ephemeral containers (dl- or install-)
+        if (name.startsWith('dl-') || name.startsWith('install-')) continue;
+        
+        const container = this.docker.getContainer(containerInfo.Id);
+        
+        if (containerInfo.State === 'running') {
+            logger.info(`Adopting running container: ${name}`);
+            
+            // 1. Recover last 1000 lines of history
+            try {
+                const logs = await container.logs({
+                    stdout: true,
+                    stderr: true,
+                    tail: 1000
+                });
+                const logLines = logs.toString('utf8').split('\n');
+                this.histories.set(name, logLines);
+            } catch (err) {
+                logger.warn(`Failed to recover logs for ${name}: ${err}`);
+            }
+
+            // 2. Re-attach log stream
+            const stream = await container.logs({
+                follow: true,
+                stdout: true,
+                stderr: true
+            });
+            this.streams.set(name, stream);
+
+            stream.on('data', (chunk) => {
+                const logLine = chunk.toString('utf8');
+                const history = this.histories.get(name) || [];
+                history.push(logLine);
+                if (history.length > 2000) history.shift();
+                this.histories.set(name, history);
+                this.emit('console', { id: name, data: logLine });
+            });
+
+            stream.on('end', () => {
+                this.emit('status', { id: name, status: 'stopped' });
+                this.streams.delete(name);
+            });
+
+            this.emit('status', { id: name, status: 'running' });
+        }
+      }
+    } catch (err: any) {
+      logger.error(`Failed to adopt containers: ${err.message}`);
+    }
   }
 
   public async startServer(config: ServerConfig): Promise<void> {
@@ -93,13 +157,16 @@ export class ProcessManager extends EventEmitter {
       // Debug: List files in host directory to verify availability
       
       // Debug: List files in host directory to verify availability
-      if (fs.existsSync(config.cwd)) {
+      if (config.isMinecraft && fs.existsSync(config.cwd)) {
           const files = fs.readdirSync(config.cwd);
           logger.info(`Files in ${config.cwd}: ${files.join(', ')}`);
           if (!files.includes('server.jar')) {
               logger.warn('WARNING: server.jar not found in host directory!');
           }
-      } else {
+      } else if (!config.isMinecraft && fs.existsSync(config.cwd)) {
+          const files = fs.readdirSync(config.cwd);
+          logger.info(`Files in ${config.cwd}: ${files.join(', ')}`);
+      } else if (!fs.existsSync(config.cwd)) {
           logger.error(`Host directory does not exist: ${config.cwd}`);
       }
 
@@ -111,19 +178,16 @@ export class ProcessManager extends EventEmitter {
         fs.mkdirSync(config.cwd, { recursive: true });
       }
 
-      // Auto-accept EULA logic
-      const eulaPath = path.join(config.cwd, 'eula.txt');
-      if (!fs.existsSync(eulaPath)) {
-          logger.info(`Auto-accepting EULA for server ${config.id}`);
-          fs.writeFileSync(eulaPath, 'eula=true\n');
-      } else {
-          // Force true if exists but might be false check? 
-          // For now, let's just ensure it exists. Some users might want a manual prompt, 
-          // but the user requested fixing the startup hang.
-          // Let's overwrite to be safe as per user request context.
-          let content = fs.readFileSync(eulaPath, 'utf8');
-          if (!content.includes('eula=true')) {
-             fs.writeFileSync(eulaPath, 'eula=true\n');
+      if (config.isMinecraft) {
+          const eulaPath = path.join(config.cwd, 'eula.txt');
+          if (!fs.existsSync(eulaPath)) {
+              logger.info(`Auto-accepting EULA for server ${config.id}`);
+              fs.writeFileSync(eulaPath, 'eula=true\n');
+          } else {
+              let content = fs.readFileSync(eulaPath, 'utf8');
+              if (!content.includes('eula=true')) {
+                fs.writeFileSync(eulaPath, 'eula=true\n');
+              }
           }
       }
 
@@ -149,6 +213,7 @@ export class ProcessManager extends EventEmitter {
             },
             Memory: config.memory * 1024 * 1024, // Convert MB to bytes
             NanoCpus: config.cpu * 10000000, // Convert % to nano cpus (approx)
+            CpuShares: config.turboMode ? 2000 : 1000, // Turbo Mode priority
             NetworkMode: 'bridge' 
           },
           // Execute the command string via shell to ensure parsing and environment variables work
@@ -184,6 +249,7 @@ export class ProcessManager extends EventEmitter {
                   },
                   Memory: config.memory * 1024 * 1024, 
                   NanoCpus: config.cpu * 10000000, 
+                  CpuShares: config.turboMode ? 2000 : 1000,
                   NetworkMode: 'bridge' 
                 },
                 Cmd: ['/bin/sh', '-c', config.command], 
@@ -199,6 +265,19 @@ export class ProcessManager extends EventEmitter {
 
       logger.info(`Starting container ${containerName}...`);
       await container.start();
+
+      // NEW: Connect to DB network if exists
+      try {
+        const db = await databaseManager.getDatabase(config.id);
+        if (db) {
+          logger.info(`Server ${config.id} has a database. Connecting to network rex-db-net-${config.id}...`);
+          const network = this.docker.getNetwork(`rex-db-net-${config.id}`);
+          await network.connect({ Container: container.id });
+          logger.info(`Connected server ${config.id} to internal DB network.`);
+        }
+      } catch (err: any) {
+        logger.warn(`Failed to connect container to DB network: ${err.message}`);
+      }
 
       // Attach to logs
       const stream = await container.logs({
@@ -280,6 +359,14 @@ export class ProcessManager extends EventEmitter {
               logger.error(`Failed to delete data directory ${cwd}: ${e.message}`);
           }
       }
+
+      // 3. Delete Database if exists
+      try {
+          await databaseManager.deleteDatabase(id);
+          logger.info(`Cleaned up database for server ${id}`);
+      } catch (e: any) {
+          logger.warn(`Failed to cleanup database for ${id}: ${e.message}`);
+      }
   }
 
   public async sendCommand(id: string, command: string): Promise<void> {
@@ -291,16 +378,46 @@ export class ProcessManager extends EventEmitter {
       const stream = await container.attach({
         stream: true,
         stdin: true,
-        stdout: false,
-        stderr: false,
+        stdout: true,
+        stderr: true,
         hijack: true
       });
       
       stream.write(command + "\n");
-      stream.end();
+      
+      // We don't necessarily need to read from THIS stream if the global stream
+      // is working, but having stdout: true ensures it echoes to the logs.
+      
+      setTimeout(() => {
+        try { stream.end(); } catch (e) {}
+      }, 500);
       
     } catch (err: any) {
       logger.error(`Failed to send command to ${id}: ${err.message}`);
+    }
+  }
+
+  public async getContainerStats(id: string): Promise<any> {
+    const containerName = `rexhost-${id}`;
+    try {
+      const container = this.docker.getContainer(containerName);
+      return await container.stats({ stream: false });
+    } catch (err: any) {
+      return null;
+    }
+  }
+
+  public async updateContainerResources(id: string, resources: { memory?: number, cpu?: number }): Promise<void> {
+    const containerName = `rexhost-${id}`;
+    try {
+      const container = this.docker.getContainer(containerName);
+      await container.update({
+        Memory: resources.memory ? resources.memory * 1024 * 1024 : undefined,
+        NanoCpus: resources.cpu ? resources.cpu * 10000000 : undefined
+      });
+      logger.info(`Updated resources for container ${containerName}`);
+    } catch (err: any) {
+      logger.error(`Failed to update resources for ${id}: ${err.message}`);
     }
   }
 
@@ -309,7 +426,6 @@ export class ProcessManager extends EventEmitter {
     try {
       const container = this.docker.getContainer(containerName);
       const data = await container.inspect();
-      return data.State.Running;
       return data.State.Running;
     } catch {
       return false;

@@ -14,6 +14,7 @@ model User {
   role      String   @default("admin")
   createdAt DateTime @default(now())
   servers   Server[]
+  subUsers  SubUser[]
 }
 
 model Setting {
@@ -41,6 +42,32 @@ model Server {
   eggId     String?
   egg       Egg?     @relation(fields: [eggId], references: [id])
   docker_image String? // Specific image selected for this server
+  turboMode    Boolean  @default(false)
+  database     Database?
+  subUsers     SubUser[]
+}
+
+model SubUser {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serverId    String
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  permissions String   // JSON array: ["console","files","startup","config","database","start","stop"]
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, serverId])
+}
+
+model Database {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  username    String
+  password    String
+  serverId    String   @unique
+  port        Int      @default(3306) // Internal management port
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
 }
 
 model Node {
@@ -81,4 +108,24 @@ model Egg {
   docker_image            String   @default("eclipse-temurin:17-jre") // Default fallback image
 
   servers                 Server[]
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  entity    String
+  entityId  String?
+  userId    String?
+  ip        String?
+  metadata  String?  // JSON string
+  createdAt DateTime @default(now())
+}
+
+model SecurityEvent {
+  id          String   @id @default(uuid())
+  type        String
+  severity    String   @default("LOW") // LOW, MEDIUM, HIGH, CRITICAL
+  description String
+  metadata    String?  // JSON string
+  createdAt   DateTime @default(now())
 }
