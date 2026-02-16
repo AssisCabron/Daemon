@@ -1296,6 +1296,12 @@ io.on('connection', (socket) => {
   socket.on('join', (serverId) => {
     socket.join(serverId);
     logger.info(`Client ${socket.id} joined room ${serverId}`);
+    
+    // Send history to the joining client
+    const history = processManager.getConsoleHistory(serverId);
+    if (history.length > 0) {
+      socket.emit('console-history', history);
+    }
   });
   
   socket.on('disconnect', () => {

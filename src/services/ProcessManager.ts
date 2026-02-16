@@ -27,6 +27,7 @@ export interface ServerConfig {
 export class ProcessManager extends EventEmitter {
   private docker: Docker;
   private streams: Map<string, NodeJS.ReadableStream> = new Map();
+  private histories: Map<string, string[]> = new Map(); // Store last N logs per server
 
   constructor() {
     super();
@@ -43,6 +44,9 @@ export class ProcessManager extends EventEmitter {
 
   public async startServer(config: ServerConfig): Promise<void> {
     const containerName = `rexhost-${config.id}`;
+    
+    // Clear history on new start
+    this.histories.set(config.id, []);
     
     try {
       // Check if container already exists
@@ -208,6 +212,13 @@ export class ProcessManager extends EventEmitter {
       stream.on('data', (chunk) => {
         // Docker logs might contain header bytes, basic cleaning
         const logLine = chunk.toString('utf8');
+        
+        // Append to history
+        const history = this.histories.get(config.id) || [];
+        history.push(logLine);
+        if (history.length > 2000) history.shift(); // Keep last 2000 lines
+        this.histories.set(config.id, history);
+
         this.emit('console', { id: config.id, data: logLine });
       });
 
@@ -456,6 +467,10 @@ export class ProcessManager extends EventEmitter {
         }
       });
     });
+  }
+
+  public getConsoleHistory(id: string): string[] {
+    return this.histories.get(id) || [];
   }
 }
 
