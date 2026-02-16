@@ -66,12 +66,15 @@ export class ProcessManager extends EventEmitter {
       // Fix permissions: Ensure the container user can write to the directory
       try {
         if (process.platform !== 'win32') {
-           // On Linux, 777 ensures the container user (usually uid 998) can write
-           // regardless of who owns the host folder (usually root).
-           // Using child_process exec for recursive chmod is often more reliable/easier than recursive fs.chmod
            const { execSync } = require('child_process');
            execSync(`chmod -R 777 "${config.cwd}"`);
-           logger.info(`Fixed permissions for ${config.cwd}`);
+           logger.info(`Fixed permissions for ${config.cwd} (Linux/Mac)`);
+        } else {
+           // Windows fix: Grant full control to Everyone to avoid Docker Desktop/WSL2 permission mapping issues
+           // /grant Everyone:(OI)(CI)F -> OI (Object Inherit), CI (Container Inherit), F (Full Control)
+           const { execSync } = require('child_process');
+           execSync(`icacls "${config.cwd}" /grant Everyone:(OI)(CI)F /T`, { stdio: 'ignore' });
+           logger.info(`Fixed permissions for ${config.cwd} (Windows)`);
         }
       } catch (err: any) {
         logger.warn(`Failed to fix permissions for ${config.cwd}: ${err.message}`);
@@ -257,6 +260,21 @@ export class ProcessManager extends EventEmitter {
     // Ensure image exists
     await this.ensureImage(image);
 
+    // Fix permissions: Ensure the container user can write to the directory
+    try {
+      if (process.platform !== 'win32') {
+          const { execSync } = require('child_process');
+          execSync(`chmod -R 777 "${cwd}"`);
+          logger.info(`Fixed permissions for download in ${cwd} (Linux/Mac)`);
+      } else {
+           const { execSync } = require('child_process');
+           execSync(`icacls "${cwd}" /grant Everyone:(OI)(CI)F /T`, { stdio: 'ignore' });
+           logger.info(`Fixed permissions for download in ${cwd} (Windows)`);
+      }
+    } catch (err: any) {
+      logger.warn(`Failed to fix permissions for ${cwd}: ${err.message}`);
+    }
+
     // Create ephemeral container for downloading
     const container = await this.docker.createContainer({
       Image: image,
@@ -296,6 +314,21 @@ export class ProcessManager extends EventEmitter {
     logger.info(`Starting installation container ${containerName} using ${containerImage}`);
 
     await this.ensureImage(containerImage);
+
+    // Fix permissions: Ensure the container user can write to the directory
+    try {
+      if (process.platform !== 'win32') {
+          const { execSync } = require('child_process');
+          execSync(`chmod -R 777 "${cwd}"`);
+          logger.info(`Fixed permissions for install in ${cwd} (Linux/Mac)`);
+      } else {
+           const { execSync } = require('child_process');
+           execSync(`icacls "${cwd}" /grant Everyone:(OI)(CI)F /T`, { stdio: 'ignore' });
+           logger.info(`Fixed permissions for install in ${cwd} (Windows)`);
+      }
+    } catch (err: any) {
+      logger.warn(`Failed to fix permissions for ${cwd}: ${err.message}`);
+    }
 
     // Prepare environment variables
     const env = Object.entries(envVars).map(([k, v]) => `${k}=${v}`);
