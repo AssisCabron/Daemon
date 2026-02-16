@@ -63,6 +63,22 @@ export class ProcessManager extends EventEmitter {
       logger.info(`Creating container ${containerName} with image ${config.dockerImage}`);
       logger.info(`Mounting host path: ${path.resolve(config.cwd)} to /home/container`);
       
+      // Fix permissions: Ensure the container user can write to the directory
+      try {
+        if (process.platform !== 'win32') {
+           // On Linux, 777 ensures the container user (usually uid 998) can write
+           // regardless of who owns the host folder (usually root).
+           // Using child_process exec for recursive chmod is often more reliable/easier than recursive fs.chmod
+           const { execSync } = require('child_process');
+           execSync(`chmod -R 777 "${config.cwd}"`);
+           logger.info(`Fixed permissions for ${config.cwd}`);
+        }
+      } catch (err: any) {
+        logger.warn(`Failed to fix permissions for ${config.cwd}: ${err.message}`);
+      }
+
+      // Debug: List files in host directory to verify availability
+      
       // Debug: List files in host directory to verify availability
       if (fs.existsSync(config.cwd)) {
           const files = fs.readdirSync(config.cwd);
