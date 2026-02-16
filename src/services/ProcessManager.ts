@@ -70,11 +70,17 @@ export class ProcessManager extends EventEmitter {
            execSync(`chmod -R 777 "${config.cwd}"`);
            logger.info(`Fixed permissions for ${config.cwd} (Linux/Mac)`);
         } else {
-           // Windows fix: Grant full control to Everyone to avoid Docker Desktop/WSL2 permission mapping issues
-           // /grant Everyone:(OI)(CI)F -> OI (Object Inherit), CI (Container Inherit), F (Full Control)
+           // Windows fix: Grant full control to Everyone (SID S-1-1-0) to avoid Docker/WSL2 permission issues
+           // Using SID *S-1-1-0 guarantees it works on non-English Windows (e.g., 'Todos' in PT-BR)
            const { execSync } = require('child_process');
-           execSync(`icacls "${config.cwd}" /grant Everyone:(OI)(CI)F /T`, { stdio: 'ignore' });
-           logger.info(`Fixed permissions for ${config.cwd} (Windows)`);
+           try {
+             execSync(`icacls "${config.cwd}" /grant *S-1-1-0:(OI)(CI)F /T`, { stdio: 'ignore' });
+             logger.info(`Fixed permissions for ${config.cwd} (Windows SID)`);
+           } catch (e) {
+             // Fallback to 'Todos' if SID fails for some reason, or just log
+             logger.warn(`Failed primary permission fix, trying fallback...`);
+             execSync(`icacls "${config.cwd}" /grant Everyone:(OI)(CI)F /T`, { stdio: 'ignore' });
+           }
         }
       } catch (err: any) {
         logger.warn(`Failed to fix permissions for ${config.cwd}: ${err.message}`);
@@ -268,8 +274,9 @@ export class ProcessManager extends EventEmitter {
           logger.info(`Fixed permissions for download in ${cwd} (Linux/Mac)`);
       } else {
            const { execSync } = require('child_process');
-           execSync(`icacls "${cwd}" /grant Everyone:(OI)(CI)F /T`, { stdio: 'ignore' });
-           logger.info(`Fixed permissions for download in ${cwd} (Windows)`);
+           // Use SID *S-1-1-0 for "Everyone" to support all languages
+           execSync(`icacls "${cwd}" /grant *S-1-1-0:(OI)(CI)F /T`, { stdio: 'ignore' });
+           logger.info(`Fixed permissions for download in ${cwd} (Windows SID)`);
       }
     } catch (err: any) {
       logger.warn(`Failed to fix permissions for ${cwd}: ${err.message}`);
@@ -323,8 +330,9 @@ export class ProcessManager extends EventEmitter {
           logger.info(`Fixed permissions for install in ${cwd} (Linux/Mac)`);
       } else {
            const { execSync } = require('child_process');
-           execSync(`icacls "${cwd}" /grant Everyone:(OI)(CI)F /T`, { stdio: 'ignore' });
-           logger.info(`Fixed permissions for install in ${cwd} (Windows)`);
+           // Use SID *S-1-1-0 for "Everyone" to support all languages
+           execSync(`icacls "${cwd}" /grant *S-1-1-0:(OI)(CI)F /T`, { stdio: 'ignore' });
+           logger.info(`Fixed permissions for install in ${cwd} (Windows SID)`);
       }
     } catch (err: any) {
       logger.warn(`Failed to fix permissions for ${cwd}: ${err.message}`);
