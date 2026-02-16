@@ -60,8 +60,10 @@ app.post('/api/setup/complete', async (req, res) => {
 });
 
 // Middleware to block API if setup not complete (except the setup endpoints)
+// Middleware to block API if setup not complete (except the setup endpoints and sync)
 app.use((req, res, next) => {
-  if (!SetupService.isSetupComplete() && !req.path.startsWith('/api/setup')) {
+  // Allow /api/setup/* and /api/servers/sync (for node adoption)
+  if (!SetupService.isSetupComplete() && !req.path.startsWith('/api/setup') && !req.path.startsWith('/api/servers/sync')) {
     return res.status(403).json({ error: 'System setup required' });
   }
   next();
@@ -72,7 +74,7 @@ import path from 'path';
 import fs from 'fs';
 import { OSUtils } from 'node-os-utils';
 import { prisma } from './lib/prisma';
-import { autoUpdater } from './services/AutoUpdater';
+// Removed duplicate autoUpdater import
 
 const SERVERS_DIR = process.platform === 'win32' 
   ? path.join(process.cwd(), 'data', 'servers')
@@ -404,6 +406,13 @@ app.post('/api/servers/sync', async (req, res) => {
     });
 
     logger.info(`Server synced: ${server.name} (${server.id}) on node: ${os.hostname()}`);
+    
+    // Auto-complete setup as slave node if not already set up
+    if (!SetupService.isSetupComplete()) {
+      await SetupService.completeSlaveSetup();
+      logger.info('Node auto-initialized as Slave Node via Server Sync.');
+    }
+
     res.json({ success: true, server });
   } catch (err: any) {
     logger.error(`Sync failed: ${err.message}`);

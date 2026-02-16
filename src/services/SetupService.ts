@@ -51,4 +51,19 @@ export class SetupService {
     
     return admin;
   }
+
+  public static async completeSlaveSetup() {
+    if (this.isSetupComplete()) return;
+
+    // Save initial settings
+    await prisma.setting.create({
+      data: {
+        key: 'system_name',
+        value: 'RexHost Node'
+      }
+    });
+
+    // Create lock file
+    fs.writeFileSync(LOCK_FILE, JSON.stringify({ completedAt: new Date(), type: 'slave' }));
+  }
 }
