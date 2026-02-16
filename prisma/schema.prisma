@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  email     String   @unique
+  role      String   @default("admin")
+  createdAt DateTime @default(now())
+  servers   Server[]
+}
+
+model Setting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+}
+
+model Server {
+  id        String   @id @default(uuid())
+  name      String
+  command   String
+  args      String
+  cwd       String
+  status    String   @default("stopped")
+  memory    Int      @default(1024)
+  cpu       Int      @default(100)
+  disk      Int      @default(10240)
+  port      Int      @default(25565)
+  createdAt DateTime @default(now())
+  ownerId   String?
+  owner     User?    @relation(fields: [ownerId], references: [id])
+  nodeId    String?
+  node      Node?    @relation(fields: [nodeId], references: [id])
+  eggId     String?
+  egg       Egg?     @relation(fields: [eggId], references: [id])
+  docker_image String? // Specific image selected for this server
+}
+
+model Node {
+  id        String   @id @default(uuid())
+  name      String
+  ip        String   @unique
+  port      Int      @default(3001)
+  status    String   @default("online")
+  location  String?
+  createdAt DateTime @default(now())
+  servers   Server[]
+}
+
+model Egg {
+  id                      String   @id @default(uuid())
+  name                    String
+  author                  String   @default("unknown")
+  description             String?
+  features                String?  // JSON string of features
+  docker_images           String?  // JSON string "{\"Java 8\": \"...\"}"
+  file_denylist           String?  // JSON array
+  startup_command         String
+  config                  String?  // JSON string of config (files, startup, logs, stop)
+  
+  // Installation Script
+  installation_script     String?
+  installation_container  String?
+  installation_entrypoint String?
+  
+  // Variables
+  variables               String?  // JSON string of variable definitions
+  
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @default(now()) @updatedAt
+  
+  // Legacy/Compatibility fields (to be deprecated or mapped)
+  category                String   @default("Minecraft")
+  docker_image            String   @default("eclipse-temurin:17-jre") // Default fallback image
+
+  servers                 Server[]
+}
